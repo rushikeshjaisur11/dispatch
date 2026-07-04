@@ -17,7 +17,10 @@ type Task = {
 type AgentEventLine =
   | { type: "system"; subtype: "init"; session_id: string }
   | { type: "result"; subtype: string; result?: string; session_id: string }
-  | { type: "assistant"; message: { content: { type: string; text?: string }[] } };
+  | { type: "assistant"; message: { content: { type: string; text?: string }[] } }
+  | { type: "thread.started"; thread_id: string }
+  | { type: "turn.completed" | "turn.failed" }
+  | { type: "item.completed"; item: { type: string; text?: string } };
 
 const DEFAULT_GROUP_ID = "default";
 
@@ -41,6 +44,7 @@ function TaskList({ db, groupId }: { db: Database; groupId: string }) {
   const [logs, setLogs] = useState<Record<string, string[]>>({});
   const sessionIds = useRef<Record<string, string>>({});
   const lastAssistantText = useRef<Record<string, string>>({});
+  const runningAgent = useRef<Record<string, string>>({});
 
   useEffect(() => {
     refresh();
@@ -56,23 +60,40 @@ function TaskList({ db, groupId }: { db: Database; groupId: string }) {
       } catch {
         return;
       }
-      if (parsed.type === "system" && parsed.subtype === "init") {
-        sessionIds.current[task_id] = parsed.session_id;
+      const sessionId =
+        parsed.type === "system" && parsed.subtype === "init"
+          ? parsed.session_id
+          : parsed.type === "thread.started"
+            ? parsed.thread_id
+            : null;
+      if (sessionId) {
+        sessionIds.current[task_id] = sessionId;
         await db.execute(
-          "INSERT INTO agent_runs (id, task_id, agent, session_id) VALUES ($1, $2, 'claude', $3)",
-          [crypto.randomUUID(), task_id, parsed.session_id],
+          "INSERT INTO agent_runs (id, task_id, agent, session_id) VALUES ($1, $2, $3, $4)",
+          [crypto.randomUUID(), task_id, runningAgent.current[task_id] ?? "claude", sessionId],
         );
-      } else if (parsed.type === "assistant") {
+        return;
+      }
+      if (parsed.type === "assistant") {
         const text = parsed.message.content.find((c) => c.type === "text")?.text;
         if (text) lastAssistantText.current[task_id] = text;
-      } else if (parsed.type === "result") {
+        return;
+      }
+      if (parsed.type === "item.completed" && parsed.item.type === "agent_message") {
+        if (parsed.item.text) lastAssistantText.current[task_id] = parsed.item.text;
+        return;
+      }
+      const endReason =
+        parsed.type === "result" ? "success" : parsed.type === "turn.completed" ? "success" : parsed.type === "turn.failed" ? "error" : null;
+      if (endReason) {
+        const summary = parsed.type === "result" ? (parsed.result ?? "") : lastAssistantText.current[task_id] ?? "";
         await db.execute(
           "UPDATE tasks SET status = 'done', updated_at = datetime('now') WHERE id = $1",
           [task_id],
         );
         await db.execute(
-          "UPDATE agent_runs SET end_reason = 'success', summary = $1, ended_at = datetime('now') WHERE task_id = $2 AND session_id = $3",
-          [parsed.result ?? "", task_id, sessionIds.current[task_id] ?? null],
+          "UPDATE agent_runs SET end_reason = $1, summary = $2, ended_at = datetime('now') WHERE task_id = $3 AND session_id = $4",
+          [endReason, summary, task_id, sessionIds.current[task_id] ?? null],
         );
         refresh();
       }
@@ -106,21 +127,23 @@ function TaskList({ db, groupId }: { db: Database; groupId: string }) {
     setTasks(rows);
   }
 
-  async function runAgent(task: Task, resumeSessionId?: string) {
+  async function runAgent(task: Task, agent: string, resumeSessionId?: string) {
     let projectDir = task.project_dir;
     if (!projectDir) {
-      projectDir = window.prompt("Project directory for Claude to work in:") ?? "";
+      projectDir = window.prompt(`Project directory for ${agent} to work in:`) ?? "";
       if (!projectDir) return;
       await db.execute("UPDATE tasks SET project_dir = $1 WHERE id = $2", [projectDir, task.id]);
     }
+    runningAgent.current[task.id] = agent;
     setLogs((prev) => ({ ...prev, [task.id]: [] }));
     await db.execute(
-      "UPDATE tasks SET status = 'running', updated_at = datetime('now') WHERE id = $1",
-      [task.id],
+      "UPDATE tasks SET status = 'running', assignee = $1, updated_at = datetime('now') WHERE id = $2",
+      [agent, task.id],
     );
     refresh();
     await invoke("run_agent", {
       taskId: task.id,
+      agent,
       projectDir,
       prompt: task.body ? `${task.title}\n\n${task.body}` : task.title,
       resumeSessionId: resumeSessionId ?? null,
@@ -132,11 +155,12 @@ function TaskList({ db, groupId }: { db: Database; groupId: string }) {
   }
 
   async function resumeAgent(task: Task) {
-    const rows = await db.select<{ session_id: string }[]>(
-      "SELECT session_id FROM agent_runs WHERE task_id = $1 AND session_id IS NOT NULL ORDER BY started_at DESC LIMIT 1",
+    const rows = await db.select<{ agent: string; session_id: string }[]>(
+      "SELECT agent, session_id FROM agent_runs WHERE task_id = $1 AND session_id IS NOT NULL ORDER BY started_at DESC LIMIT 1",
       [task.id],
     );
-    await runAgent(task, rows[0]?.session_id);
+    if (!rows[0]) return;
+    await runAgent(task, rows[0].agent, rows[0].session_id);
   }
 
   async function addTask() {
@@ -195,9 +219,14 @@ function TaskList({ db, groupId }: { db: Database; groupId: string }) {
                   Resume
                 </button>
               ) : (
-                <button className="text-xs px-2 py-1 bg-gray-200 rounded" onClick={() => runAgent(t)}>
-                  Run w/ Claude
-                </button>
+                <>
+                  <button className="text-xs px-2 py-1 bg-gray-200 rounded" onClick={() => runAgent(t, "claude")}>
+                    Run w/ Claude
+                  </button>
+                  <button className="text-xs px-2 py-1 bg-gray-200 rounded" onClick={() => runAgent(t, "codex")}>
+                    Run w/ Codex
+                  </button>
+                </>
               )}
             </div>
             {logs[t.id] && logs[t.id].length > 0 && (

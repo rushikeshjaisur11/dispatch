@@ -33,22 +33,34 @@ fn run_agent(
     app: tauri::AppHandle,
     sup: tauri::State<Supervisor>,
     task_id: String,
+    agent: String,
     project_dir: String,
     prompt: String,
     resume_session_id: Option<String>,
 ) -> Result<(), String> {
-    let mut cmd = Command::new("claude");
-    if let Some(id) = &resume_session_id {
-        cmd.arg("--resume").arg(id);
-    }
-    cmd.arg("-p")
-        .arg(&prompt)
-        .arg("--output-format")
-        .arg("stream-json")
-        .arg("--verbose")
-        .arg("--permission-mode")
-        .arg("bypassPermissions")
-        .current_dir(&project_dir)
+    let mut cmd = if agent == "codex" {
+        let mut c = Command::new("codex");
+        c.arg("exec");
+        if let Some(id) = &resume_session_id {
+            c.arg("resume").arg(id);
+        }
+        c.arg("--json").arg("--sandbox").arg("workspace-write").arg(&prompt);
+        c
+    } else {
+        let mut c = Command::new("claude");
+        if let Some(id) = &resume_session_id {
+            c.arg("--resume").arg(id);
+        }
+        c.arg("-p")
+            .arg(&prompt)
+            .arg("--output-format")
+            .arg("stream-json")
+            .arg("--verbose")
+            .arg("--permission-mode")
+            .arg("bypassPermissions");
+        c
+    };
+    cmd.current_dir(&project_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
 
