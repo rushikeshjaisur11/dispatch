@@ -191,7 +191,14 @@ function TaskList({ db, groupId }: { db: Database; groupId: string }) {
     const iso = dueAt ? new Date(dueAt).toISOString() : null;
     await db.execute("UPDATE tasks SET due_at = $1, updated_at = datetime('now') WHERE id = $2", [iso, task.id]);
     refresh();
-    if (iso) await pushTaskToCalendar(db, { ...task, due_at: iso });
+    if (iso) {
+      try {
+        await pushTaskToCalendar(db, { ...task, due_at: iso });
+      } catch (err) {
+        // ponytail: alert() as a quick diagnostic surface; replace with inline row status if this becomes routine.
+        alert(`Calendar push failed: ${err}`);
+      }
+    }
   }
 
   async function toggleDone(task: Task) {
@@ -323,8 +330,7 @@ function SettingsView() {
   const [anonKey, setAnonKey] = useState("");
   const [session, setSession] = useState<Session | null>(null);
   const [email, setEmail] = useState("");
-  const [code, setCode] = useState("");
-  const [codeSent, setCodeSent] = useState(false);
+  const [linkSent, setLinkSent] = useState(false);
   const [status, setStatus] = useState("");
   const [googleClientId, setGoogleClientId] = useState("");
   const [googleClientSecret, setGoogleClientSecret] = useState("");
@@ -367,6 +373,23 @@ function SettingsView() {
     };
   }, [db]);
 
+  useEffect(() => {
+    const un = listen<{ code?: string }>("email-auth-redirect", async (e) => {
+      const sb = getSupabase();
+      if (!sb) return;
+      if (!e.payload.code) {
+        setStatus("Sign-in link didn't include a code — check the Supabase redirect URL allow-list.");
+        return;
+      }
+      const { data, error } = await sb.auth.exchangeCodeForSession(e.payload.code);
+      setStatus(error ? error.message : "Signed in.");
+      if (data.session) setSession(data.session);
+    });
+    return () => {
+      un.then((f) => f());
+    };
+  }, [db]);
+
   async function saveGoogleCreds() {
     if (!db || !googleClientId.trim() || !googleClientSecret.trim()) return;
     await setSetting(db, "google_client_id", googleClientId.trim());
@@ -395,20 +418,16 @@ function SettingsView() {
     setStatus("Connected.");
   }
 
-  async function sendCode() {
+  async function sendMagicLink() {
     const sb = getSupabase();
     if (!sb || !email.trim()) return;
-    const { error } = await sb.auth.signInWithOtp({ email: email.trim(), options: { shouldCreateUser: true } });
-    setStatus(error ? error.message : "Code sent — check your email.");
-    if (!error) setCodeSent(true);
-  }
-
-  async function verifyCode() {
-    const sb = getSupabase();
-    if (!sb || !code.trim()) return;
-    const { data, error } = await sb.auth.verifyOtp({ email: email.trim(), token: code.trim(), type: "email" });
-    setStatus(error ? error.message : "Signed in.");
-    if (data.session) setSession(data.session);
+    const port = await invoke<number>("start_local_redirect_listener");
+    const { error } = await sb.auth.signInWithOtp({
+      email: email.trim(),
+      options: { shouldCreateUser: true, emailRedirectTo: `http://127.0.0.1:${port}` },
+    });
+    setStatus(error ? error.message : "Link sent — check your email and click it.");
+    if (!error) setLinkSent(true);
   }
 
   async function signOut() {
@@ -468,23 +487,10 @@ function SettingsView() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />
-            {!codeSent ? (
-              <button className="px-4 py-2 bg-black text-white rounded" onClick={sendCode}>
-                Send sign-in code
-              </button>
-            ) : (
-              <div className="flex gap-2">
-                <input
-                  className="flex-1 border rounded px-3 py-2"
-                  placeholder="6-digit code"
-                  value={code}
-                  onChange={(e) => setCode(e.target.value)}
-                />
-                <button className="px-4 py-2 bg-black text-white rounded" onClick={verifyCode}>
-                  Verify
-                </button>
-              </div>
-            )}
+            <button className="px-4 py-2 bg-black text-white rounded" onClick={sendMagicLink}>
+              Send sign-in link
+            </button>
+            {linkSent && <p className="text-sm text-gray-500">Click the link in your email — this window will pick it up automatically.</p>}
           </div>
         )}
         {status && <p className="text-sm text-gray-500">{status}</p>}

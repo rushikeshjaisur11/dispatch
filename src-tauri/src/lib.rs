@@ -104,6 +104,39 @@ fn pause_agent(sup: tauri::State<Supervisor>, task_id: String) -> Result<(), Str
     Ok(())
 }
 
+/// Fixed (not ephemeral) so it can be added once to Supabase's redirect-URL allow-list —
+/// Supabase's wildcard matching for localhost ports is unreliable (supabase#34912), so a
+/// changing port per run would mean re-configuring the allow-list every time.
+const LOCAL_REDIRECT_PORT: u16 = 53682;
+
+/// Binds a fixed loopback port and, on the first request, captures the `code` query
+/// param (PKCE auth code) and emits it as `email-auth-redirect`. Generic on purpose: any
+/// "click a link in your email/browser, land back in the app" flow can reuse this instead
+/// of a full deep-link plugin.
+#[tauri::command]
+fn start_local_redirect_listener(app: tauri::AppHandle) -> Result<u16, String> {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", LOCAL_REDIRECT_PORT)).map_err(|e| e.to_string())?;
+    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut buf = [0u8; 4096];
+            if let Ok(n) = std::io::Read::read(&mut stream, &mut buf) {
+                let request_line = String::from_utf8_lossy(&buf[..n]);
+                let path = request_line.split_whitespace().nth(1).unwrap_or("");
+                if let Ok(url) = url::Url::parse(&format!("http://127.0.0.1{path}")) {
+                    let code = url.query_pairs().find(|(k, _)| k == "code").map(|(_, v)| v.to_string());
+                    let body = "<html><body>Signed in — you can close this tab.</body></html>";
+                    let response =
+                        format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}", body.len(), body);
+                    let _ = std::io::Write::write_all(&mut stream, response.as_bytes());
+                    let _ = app.emit("email-auth-redirect", serde_json::json!({ "code": code }));
+                }
+            }
+        }
+    });
+    Ok(port)
+}
+
 fn open_sticky_window(app: &tauri::AppHandle, group_id: &str) {
     let label = format!("sticky-{group_id}");
     if let Some(win) = app.get_webview_window(&label) {
@@ -163,6 +196,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             run_agent,
             pause_agent,
+            start_local_redirect_listener,
             google::google_auth_start,
             google::google_auth_status,
             google::google_auth_sign_out,
