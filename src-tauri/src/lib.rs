@@ -8,6 +8,8 @@ use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use tauri_plugin_sql::{Migration, MigrationKind};
 
+mod google;
+
 fn migrations() -> Vec<Migration> {
     vec![
         Migration {
@@ -158,7 +160,17 @@ pub fn run() {
         )
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(Supervisor(Mutex::new(HashMap::new())))
-        .invoke_handler(tauri::generate_handler![run_agent, pause_agent])
+        .invoke_handler(tauri::generate_handler![
+            run_agent,
+            pause_agent,
+            google::google_auth_start,
+            google::google_auth_status,
+            google::google_auth_sign_out,
+            google::google_calendar_ensure,
+            google::google_calendar_upsert_event,
+            google::google_calendar_delete_event,
+            google::google_calendar_list_events,
+        ])
         .setup(|app| {
             let show_board = MenuItem::with_id(app, "show_board", "Show Board", true, None::<&str>)?;
             let new_sticky =

@@ -7,6 +7,7 @@ import type { Session } from "@supabase/supabase-js";
 import { getSupabase, initSupabase } from "./lib/supabase";
 import { getMachineId, getSetting, setSetting } from "./lib/settings";
 import { syncNow } from "./lib/sync";
+import { pushTaskToCalendar, pullCalendarEvents, getGoogleCreds } from "./lib/googleCalendar";
 import "./App.css";
 
 type Task = {
@@ -17,6 +18,8 @@ type Task = {
   status: string;
   project_dir: string | null;
   machine_id: string | null;
+  due_at: string | null;
+  calendar_event_id: string | null;
 };
 
 type AgentEventLine =
@@ -55,6 +58,9 @@ function TaskList({ db, groupId }: { db: Database; groupId: string }) {
   useEffect(() => {
     refresh();
     getMachineId(db).then(setMachineId);
+    getGoogleCreds(db).then((creds) => {
+      if (creds) pullCalendarEvents(db, groupId).then(refresh);
+    });
   }, [db, groupId]);
 
   useEffect(() => {
@@ -128,7 +134,7 @@ function TaskList({ db, groupId }: { db: Database; groupId: string }) {
 
   async function refresh() {
     const rows = await db.select<Task[]>(
-      "SELECT id, note_group_id, title, body, status, project_dir, machine_id FROM tasks WHERE note_group_id = $1 AND deleted_at IS NULL ORDER BY updated_at DESC",
+      "SELECT id, note_group_id, title, body, status, project_dir, machine_id, due_at, calendar_event_id FROM tasks WHERE note_group_id = $1 AND deleted_at IS NULL ORDER BY updated_at DESC",
       [groupId],
     );
     setTasks(rows);
@@ -179,6 +185,13 @@ function TaskList({ db, groupId }: { db: Database; groupId: string }) {
     );
     setTitle("");
     refresh();
+  }
+
+  async function setDueDate(task: Task, dueAt: string) {
+    const iso = dueAt ? new Date(dueAt).toISOString() : null;
+    await db.execute("UPDATE tasks SET due_at = $1, updated_at = datetime('now') WHERE id = $2", [iso, task.id]);
+    refresh();
+    if (iso) await pushTaskToCalendar(db, { ...task, due_at: iso });
   }
 
   async function toggleDone(task: Task) {
@@ -237,6 +250,12 @@ function TaskList({ db, groupId }: { db: Database; groupId: string }) {
                   </button>
                 </>
               )}
+              <input
+                type="datetime-local"
+                className="text-xs border rounded px-1"
+                value={t.due_at ? t.due_at.slice(0, 16) : ""}
+                onChange={(e) => setDueDate(t, e.target.value)}
+              />
             </div>
             {logs[t.id] && logs[t.id].length > 0 && (
               <pre className="mt-1 text-[10px] text-gray-500 max-h-24 overflow-auto whitespace-pre-wrap">
@@ -307,6 +326,10 @@ function SettingsView() {
   const [code, setCode] = useState("");
   const [codeSent, setCodeSent] = useState(false);
   const [status, setStatus] = useState("");
+  const [googleClientId, setGoogleClientId] = useState("");
+  const [googleClientSecret, setGoogleClientSecret] = useState("");
+  const [googleEmail, setGoogleEmail] = useState<string | null>(null);
+  const [googleStatus, setGoogleStatus] = useState("");
 
   useEffect(() => {
     if (!db) return;
@@ -320,8 +343,47 @@ function SettingsView() {
         const { data } = await sb.auth.getSession();
         setSession(data.session);
       }
+      const gClientId = await getSetting(db, "google_client_id");
+      const gClientSecret = await getSetting(db, "google_client_secret");
+      if (gClientId) setGoogleClientId(gClientId);
+      if (gClientSecret) setGoogleClientSecret(gClientSecret);
+      const signedIn = await invoke<boolean>("google_auth_status");
+      if (signedIn) setGoogleEmail(await getSetting(db, "google_email"));
     })();
   }, [db]);
+
+  useEffect(() => {
+    const un = listen<{ success: boolean; email?: string; error?: string }>("google-auth-result", async (e) => {
+      if (e.payload.success && e.payload.email) {
+        setGoogleEmail(e.payload.email);
+        setGoogleStatus("Connected.");
+        if (db) await setSetting(db, "google_email", e.payload.email);
+      } else {
+        setGoogleStatus(e.payload.error ?? "Google sign-in failed.");
+      }
+    });
+    return () => {
+      un.then((f) => f());
+    };
+  }, [db]);
+
+  async function saveGoogleCreds() {
+    if (!db || !googleClientId.trim() || !googleClientSecret.trim()) return;
+    await setSetting(db, "google_client_id", googleClientId.trim());
+    await setSetting(db, "google_client_secret", googleClientSecret.trim());
+    setGoogleStatus("Saved. Click Connect to sign in.");
+  }
+
+  async function connectGoogle() {
+    setGoogleStatus("Opening browser for Google sign-in...");
+    await invoke("google_auth_start", { clientId: googleClientId.trim(), clientSecret: googleClientSecret.trim() });
+  }
+
+  async function disconnectGoogle() {
+    await invoke("google_auth_sign_out");
+    setGoogleEmail(null);
+    setGoogleStatus("Disconnected.");
+  }
 
   async function saveConnection() {
     if (!db || !url.trim() || !anonKey.trim()) return;
@@ -426,6 +488,38 @@ function SettingsView() {
           </div>
         )}
         {status && <p className="text-sm text-gray-500">{status}</p>}
+      </section>
+
+      <section className="space-y-2">
+        <h2 className="font-medium">Google Calendar</h2>
+        <input
+          className="w-full border rounded px-3 py-2"
+          placeholder="Google OAuth Client ID"
+          value={googleClientId}
+          onChange={(e) => setGoogleClientId(e.target.value)}
+        />
+        <input
+          className="w-full border rounded px-3 py-2"
+          placeholder="Google OAuth Client Secret"
+          value={googleClientSecret}
+          onChange={(e) => setGoogleClientSecret(e.target.value)}
+        />
+        <button className="px-4 py-2 bg-black text-white rounded" onClick={saveGoogleCreds}>
+          Save
+        </button>
+        {googleEmail ? (
+          <div className="space-y-2">
+            <p className="text-sm text-gray-600">Connected as {googleEmail}</p>
+            <button className="px-4 py-2 bg-gray-200 rounded" onClick={disconnectGoogle}>
+              Disconnect
+            </button>
+          </div>
+        ) : (
+          <button className="px-4 py-2 bg-gray-200 rounded" onClick={connectGoogle}>
+            Connect Google Calendar
+          </button>
+        )}
+        {googleStatus && <p className="text-sm text-gray-500">{googleStatus}</p>}
       </section>
     </main>
   );
