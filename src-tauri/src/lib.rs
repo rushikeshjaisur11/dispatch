@@ -1,16 +1,81 @@
+use std::collections::HashMap;
+use std::io::{BufRead, BufReader};
+use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use tauri_plugin_sql::{Migration, MigrationKind};
 
 fn migrations() -> Vec<Migration> {
-    vec![Migration {
-        version: 1,
-        description: "create note_groups and tasks",
-        kind: MigrationKind::Up,
-        sql: include_str!("../migrations/0001_init.sql"),
-    }]
+    vec![
+        Migration {
+            version: 1,
+            description: "create note_groups and tasks",
+            kind: MigrationKind::Up,
+            sql: include_str!("../migrations/0001_init.sql"),
+        },
+        Migration {
+            version: 2,
+            description: "create agent_runs",
+            kind: MigrationKind::Up,
+            sql: include_str!("../migrations/0002_agent_runs.sql"),
+        },
+    ]
+}
+
+/// Tracks child processes for running agent tasks, keyed by task_id, so a task can be paused.
+struct Supervisor(Mutex<HashMap<String, Child>>);
+
+#[tauri::command]
+fn run_agent(
+    app: tauri::AppHandle,
+    sup: tauri::State<Supervisor>,
+    task_id: String,
+    project_dir: String,
+    prompt: String,
+    resume_session_id: Option<String>,
+) -> Result<(), String> {
+    let mut cmd = Command::new("claude");
+    if let Some(id) = &resume_session_id {
+        cmd.arg("--resume").arg(id);
+    }
+    cmd.arg("-p")
+        .arg(&prompt)
+        .arg("--output-format")
+        .arg("stream-json")
+        .arg("--verbose")
+        .arg("--permission-mode")
+        .arg("bypassPermissions")
+        .current_dir(&project_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+
+    let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+    let stdout = child.stdout.take().ok_or("failed to capture stdout")?;
+    sup.0.lock().unwrap().insert(task_id.clone(), child);
+
+    std::thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines().map_while(Result::ok) {
+            let _ = app.emit("agent-event", serde_json::json!({ "task_id": task_id, "line": line }));
+        }
+        if let Some(state) = app.try_state::<Supervisor>() {
+            state.0.lock().unwrap().remove(&task_id);
+        }
+        let _ = app.emit("agent-exit", serde_json::json!({ "task_id": task_id }));
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+fn pause_agent(sup: tauri::State<Supervisor>, task_id: String) -> Result<(), String> {
+    if let Some(mut child) = sup.0.lock().unwrap().remove(&task_id) {
+        child.kill().map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 fn open_sticky_window(app: &tauri::AppHandle, group_id: &str) {
@@ -57,6 +122,8 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .manage(Supervisor(Mutex::new(HashMap::new())))
+        .invoke_handler(tauri::generate_handler![run_agent, pause_agent])
         .setup(|app| {
             let show_board = MenuItem::with_id(app, "show_board", "Show Board", true, None::<&str>)?;
             let new_sticky =
