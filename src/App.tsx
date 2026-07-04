@@ -3,6 +3,10 @@ import Database from "@tauri-apps/plugin-sql";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import type { Session } from "@supabase/supabase-js";
+import { getSupabase, initSupabase } from "./lib/supabase";
+import { getMachineId, getSetting, setSetting } from "./lib/settings";
+import { syncNow } from "./lib/sync";
 import "./App.css";
 
 type Task = {
@@ -12,6 +16,7 @@ type Task = {
   body: string;
   status: string;
   project_dir: string | null;
+  machine_id: string | null;
 };
 
 type AgentEventLine =
@@ -45,9 +50,11 @@ function TaskList({ db, groupId }: { db: Database; groupId: string }) {
   const sessionIds = useRef<Record<string, string>>({});
   const lastAssistantText = useRef<Record<string, string>>({});
   const runningAgent = useRef<Record<string, string>>({});
+  const [machineId, setMachineId] = useState<string | null>(null);
 
   useEffect(() => {
     refresh();
+    getMachineId(db).then(setMachineId);
   }, [db, groupId]);
 
   useEffect(() => {
@@ -121,7 +128,7 @@ function TaskList({ db, groupId }: { db: Database; groupId: string }) {
 
   async function refresh() {
     const rows = await db.select<Task[]>(
-      "SELECT id, note_group_id, title, body, status, project_dir FROM tasks WHERE note_group_id = $1 AND deleted_at IS NULL ORDER BY updated_at DESC",
+      "SELECT id, note_group_id, title, body, status, project_dir, machine_id FROM tasks WHERE note_group_id = $1 AND deleted_at IS NULL ORDER BY updated_at DESC",
       [groupId],
     );
     setTasks(rows);
@@ -137,8 +144,8 @@ function TaskList({ db, groupId }: { db: Database; groupId: string }) {
     runningAgent.current[task.id] = agent;
     setLogs((prev) => ({ ...prev, [task.id]: [] }));
     await db.execute(
-      "UPDATE tasks SET status = 'running', assignee = $1, updated_at = datetime('now') WHERE id = $2",
-      [agent, task.id],
+      "UPDATE tasks SET status = 'running', assignee = $1, machine_id = $2, updated_at = datetime('now') WHERE id = $3",
+      [agent, machineId, task.id],
     );
     refresh();
     await invoke("run_agent", {
@@ -210,7 +217,9 @@ function TaskList({ db, groupId }: { db: Database; groupId: string }) {
               >
                 {t.title}
               </span>
-              {t.status === "running" ? (
+              {t.machine_id && t.machine_id !== machineId ? (
+                <span className="text-xs text-gray-400">on another machine</span>
+              ) : t.status === "running" ? (
                 <button className="text-xs px-2 py-1 bg-gray-200 rounded" onClick={() => pauseAgent(t.id)}>
                   Pause
                 </button>
@@ -289,6 +298,139 @@ function CaptureBar() {
   );
 }
 
+function SettingsView() {
+  const db = useDb();
+  const [url, setUrl] = useState("");
+  const [anonKey, setAnonKey] = useState("");
+  const [session, setSession] = useState<Session | null>(null);
+  const [email, setEmail] = useState("");
+  const [code, setCode] = useState("");
+  const [codeSent, setCodeSent] = useState(false);
+  const [status, setStatus] = useState("");
+
+  useEffect(() => {
+    if (!db) return;
+    (async () => {
+      const savedUrl = await getSetting(db, "supabase_url");
+      const savedKey = await getSetting(db, "supabase_anon_key");
+      if (savedUrl && savedKey) {
+        setUrl(savedUrl);
+        setAnonKey(savedKey);
+        const sb = initSupabase(savedUrl, savedKey);
+        const { data } = await sb.auth.getSession();
+        setSession(data.session);
+      }
+    })();
+  }, [db]);
+
+  async function saveConnection() {
+    if (!db || !url.trim() || !anonKey.trim()) return;
+    await setSetting(db, "supabase_url", url.trim());
+    await setSetting(db, "supabase_anon_key", anonKey.trim());
+    const sb = initSupabase(url.trim(), anonKey.trim());
+    const { data } = await sb.auth.getSession();
+    setSession(data.session);
+    setStatus("Connected.");
+  }
+
+  async function sendCode() {
+    const sb = getSupabase();
+    if (!sb || !email.trim()) return;
+    const { error } = await sb.auth.signInWithOtp({ email: email.trim(), options: { shouldCreateUser: true } });
+    setStatus(error ? error.message : "Code sent — check your email.");
+    if (!error) setCodeSent(true);
+  }
+
+  async function verifyCode() {
+    const sb = getSupabase();
+    if (!sb || !code.trim()) return;
+    const { data, error } = await sb.auth.verifyOtp({ email: email.trim(), token: code.trim(), type: "email" });
+    setStatus(error ? error.message : "Signed in.");
+    if (data.session) setSession(data.session);
+  }
+
+  async function signOut() {
+    const sb = getSupabase();
+    if (!sb) return;
+    await sb.auth.signOut();
+    setSession(null);
+  }
+
+  async function doSync() {
+    if (!db || !session) return;
+    setStatus("Syncing...");
+    await syncNow(db, session.user.id);
+    setStatus("Synced.");
+  }
+
+  return (
+    <main className="min-h-screen bg-gray-50 p-6 space-y-6">
+      <h1 className="text-2xl font-semibold">Settings</h1>
+
+      <section className="space-y-2">
+        <h2 className="font-medium">Supabase connection</h2>
+        <input
+          className="w-full border rounded px-3 py-2"
+          placeholder="Project URL (https://xxxx.supabase.co)"
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+        />
+        <input
+          className="w-full border rounded px-3 py-2"
+          placeholder="anon public key"
+          value={anonKey}
+          onChange={(e) => setAnonKey(e.target.value)}
+        />
+        <button className="px-4 py-2 bg-black text-white rounded" onClick={saveConnection}>
+          Save connection
+        </button>
+      </section>
+
+      <section className="space-y-2">
+        <h2 className="font-medium">Account</h2>
+        {session ? (
+          <div className="space-y-2">
+            <p className="text-sm text-gray-600">Signed in as {session.user.email}</p>
+            <button className="px-4 py-2 bg-gray-200 rounded" onClick={doSync}>
+              Sync now
+            </button>
+            <button className="px-4 py-2 bg-gray-200 rounded ml-2" onClick={signOut}>
+              Sign out
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <input
+              className="w-full border rounded px-3 py-2"
+              placeholder="you@example.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+            {!codeSent ? (
+              <button className="px-4 py-2 bg-black text-white rounded" onClick={sendCode}>
+                Send sign-in code
+              </button>
+            ) : (
+              <div className="flex gap-2">
+                <input
+                  className="flex-1 border rounded px-3 py-2"
+                  placeholder="6-digit code"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                />
+                <button className="px-4 py-2 bg-black text-white rounded" onClick={verifyCode}>
+                  Verify
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+        {status && <p className="text-sm text-gray-500">{status}</p>}
+      </section>
+    </main>
+  );
+}
+
 function Board() {
   const db = useDb();
   return (
@@ -303,8 +445,10 @@ function App() {
   const params = new URLSearchParams(window.location.search);
   const sticky = params.get("sticky");
   const capture = params.get("capture");
+  const settings = params.get("settings");
 
   if (capture) return <CaptureBar />;
+  if (settings) return <SettingsView />;
   if (sticky) return <StickyNote groupId={sticky} />;
   return <Board />;
 }

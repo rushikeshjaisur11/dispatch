@@ -22,6 +22,18 @@ fn migrations() -> Vec<Migration> {
             kind: MigrationKind::Up,
             sql: include_str!("../migrations/0002_agent_runs.sql"),
         },
+        Migration {
+            version: 3,
+            description: "create settings",
+            kind: MigrationKind::Up,
+            sql: include_str!("../migrations/0003_settings.sql"),
+        },
+        Migration {
+            version: 4,
+            description: "add note_groups.updated_at",
+            kind: MigrationKind::Up,
+            sql: include_str!("../migrations/0004_note_group_updated_at.sql"),
+        },
     ]
 }
 
@@ -109,6 +121,17 @@ fn open_sticky_window(app: &tauri::AppHandle, group_id: &str) {
     .build();
 }
 
+fn open_settings_window(app: &tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("settings") {
+        let _ = win.set_focus();
+        return;
+    }
+    let _ = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("index.html?settings=1".into()))
+        .title("AgentPad Settings")
+        .inner_size(420.0, 560.0)
+        .build();
+}
+
 fn open_capture_window(app: &tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("capture") {
         let _ = win.set_focus();
@@ -140,8 +163,9 @@ pub fn run() {
             let show_board = MenuItem::with_id(app, "show_board", "Show Board", true, None::<&str>)?;
             let new_sticky =
                 MenuItem::with_id(app, "new_sticky", "New Sticky Note", true, None::<&str>)?;
+            let open_settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_board, &new_sticky, &quit])?;
+            let menu = Menu::with_items(app, &[&show_board, &new_sticky, &open_settings, &quit])?;
 
             TrayIconBuilder::new()
                 .menu(&menu)
@@ -154,6 +178,7 @@ pub fn run() {
                         }
                     }
                     "new_sticky" => open_sticky_window(app, "default"),
+                    "settings" => open_settings_window(app),
                     "quit" => app.exit(0),
                     _ => {}
                 })
