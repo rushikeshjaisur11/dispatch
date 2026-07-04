@@ -13,9 +13,10 @@ const TABLES: { name: string; timeCol: string }[] = [
   { name: "agent_runs", timeCol: "started_at" },
 ];
 
-export async function pushChanges(db: Database, userId: string): Promise<void> {
+export async function pushChanges(db: Database, userId: string): Promise<string[]> {
   const sb = getSupabase();
-  if (!sb) return;
+  if (!sb) return ["Supabase not configured"];
+  const errors: string[] = [];
   for (const { name, timeCol } of TABLES) {
     const watermarkKey = `push_watermark_${name}`;
     const watermark = (await getSetting(db, watermarkKey)) ?? EPOCH;
@@ -26,15 +27,19 @@ export async function pushChanges(db: Database, userId: string): Promise<void> {
     if (rows.length === 0) continue;
     const withUser = rows.map((r) => ({ ...r, user_id: userId }));
     const { error } = await sb.from(name).upsert(withUser, { onConflict: "id" });
-    if (!error) {
+    if (error) {
+      errors.push(`push ${name}: ${error.message}`);
+    } else {
       await setSetting(db, watermarkKey, rows[rows.length - 1][timeCol] as string);
     }
   }
+  return errors;
 }
 
-export async function pullChanges(db: Database, userId: string): Promise<void> {
+export async function pullChanges(db: Database, userId: string): Promise<string[]> {
   const sb = getSupabase();
-  if (!sb) return;
+  if (!sb) return ["Supabase not configured"];
+  const errors: string[] = [];
   for (const { name, timeCol } of TABLES) {
     const watermarkKey = `pull_watermark_${name}`;
     const watermark = (await getSetting(db, watermarkKey)) ?? EPOCH;
@@ -44,7 +49,11 @@ export async function pullChanges(db: Database, userId: string): Promise<void> {
       .eq("user_id", userId)
       .gt(timeCol, watermark)
       .order(timeCol, { ascending: true });
-    if (error || !data || data.length === 0) continue;
+    if (error) {
+      errors.push(`pull ${name}: ${error.message}`);
+      continue;
+    }
+    if (!data || data.length === 0) continue;
     for (const row of data) {
       const cols = Object.keys(row).filter((k) => k !== "user_id");
       const values = cols.map((c) => row[c]);
@@ -60,9 +69,10 @@ export async function pullChanges(db: Database, userId: string): Promise<void> {
     }
     await setSetting(db, watermarkKey, data[data.length - 1][timeCol] as string);
   }
+  return errors;
 }
 
 export async function syncNow(db: Database, userId: string): Promise<void> {
-  await pushChanges(db, userId);
-  await pullChanges(db, userId);
+  const errors = [...(await pushChanges(db, userId)), ...(await pullChanges(db, userId))];
+  if (errors.length > 0) throw new Error(errors.join("; "));
 }

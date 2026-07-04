@@ -440,8 +440,12 @@ function SettingsView() {
   async function doSync() {
     if (!db || !session) return;
     setStatus("Syncing...");
-    await syncNow(db, session.user.id);
-    setStatus("Synced.");
+    try {
+      await syncNow(db, session.user.id);
+      setStatus("Synced.");
+    } catch (err) {
+      setStatus(`Sync failed: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   return (
