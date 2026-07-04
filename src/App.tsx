@@ -8,6 +8,7 @@ import { getSupabase, initSupabase } from "./lib/supabase";
 import { getMachineId, getSetting, setSetting } from "./lib/settings";
 import { syncNow } from "./lib/sync";
 import { pushTaskToCalendar, pullCalendarEvents, getGoogleCreds } from "./lib/googleCalendar";
+import { writeTaskNote, isObsidianVault } from "./lib/obsidian";
 import "./App.css";
 
 type Task = {
@@ -100,14 +101,23 @@ function TaskList({ db, groupId }: { db: Database; groupId: string }) {
         parsed.type === "result" ? "success" : parsed.type === "turn.completed" ? "success" : parsed.type === "turn.failed" ? "error" : null;
       if (endReason) {
         const summary = parsed.type === "result" ? (parsed.result ?? "") : lastAssistantText.current[task_id] ?? "";
+        const runRows = await db.select<{ started_at: string }[]>(
+          "SELECT started_at FROM agent_runs WHERE task_id = $1 AND session_id = $2",
+          [task_id, sessionIds.current[task_id] ?? null],
+        );
         await db.execute(
           "UPDATE tasks SET status = 'done', updated_at = datetime('now') WHERE id = $1",
           [task_id],
         );
+        const endedAt = new Date().toISOString().replace("T", " ").slice(0, 19);
         await db.execute(
           "UPDATE agent_runs SET end_reason = $1, summary = $2, ended_at = datetime('now') WHERE task_id = $3 AND session_id = $4",
           [endReason, summary, task_id, sessionIds.current[task_id] ?? null],
         );
+        const task = tasks.find((t) => t.id === task_id);
+        if (task) {
+          await writeTaskNote(db, { ...task, status: "done" }, runningAgent.current[task_id] ?? "claude", summary, runRows[0]?.started_at ?? null, endedAt);
+        }
         refresh();
       }
     });
@@ -115,14 +125,21 @@ function TaskList({ db, groupId }: { db: Database; groupId: string }) {
       const { task_id } = e.payload;
       const task = tasks.find((t) => t.id === task_id);
       if (task && task.status === "running") {
+        const runRows = await db.select<{ started_at: string }[]>(
+          "SELECT started_at FROM agent_runs WHERE task_id = $1 AND session_id = $2",
+          [task_id, sessionIds.current[task_id] ?? null],
+        );
         await db.execute(
           "UPDATE tasks SET status = 'paused', updated_at = datetime('now') WHERE id = $1",
           [task_id],
         );
+        const summary = lastAssistantText.current[task_id] ?? "";
+        const endedAt = new Date().toISOString().replace("T", " ").slice(0, 19);
         await db.execute(
           "UPDATE agent_runs SET end_reason = 'stopped', summary = $1, ended_at = datetime('now') WHERE task_id = $2 AND session_id = $3",
-          [lastAssistantText.current[task_id] ?? "", task_id, sessionIds.current[task_id] ?? null],
+          [summary, task_id, sessionIds.current[task_id] ?? null],
         );
+        await writeTaskNote(db, { ...task, status: "paused" }, runningAgent.current[task_id] ?? "claude", summary, runRows[0]?.started_at ?? null, endedAt);
         refresh();
       }
     });
@@ -336,6 +353,9 @@ function SettingsView() {
   const [googleClientSecret, setGoogleClientSecret] = useState("");
   const [googleEmail, setGoogleEmail] = useState<string | null>(null);
   const [googleStatus, setGoogleStatus] = useState("");
+  const [vaultPath, setVaultPath] = useState("");
+  const [vaultFolder, setVaultFolder] = useState("inbox");
+  const [vaultStatus, setVaultStatus] = useState("");
 
   useEffect(() => {
     if (!db) return;
@@ -355,6 +375,10 @@ function SettingsView() {
       if (gClientSecret) setGoogleClientSecret(gClientSecret);
       const signedIn = await invoke<boolean>("google_auth_status");
       if (signedIn) setGoogleEmail(await getSetting(db, "google_email"));
+      const savedVaultPath = await getSetting(db, "obsidian_vault_path");
+      const savedVaultFolder = await getSetting(db, "obsidian_folder");
+      if (savedVaultPath) setVaultPath(savedVaultPath);
+      if (savedVaultFolder) setVaultFolder(savedVaultFolder);
     })();
   }, [db]);
 
@@ -406,6 +430,14 @@ function SettingsView() {
     await invoke("google_auth_sign_out");
     setGoogleEmail(null);
     setGoogleStatus("Disconnected.");
+  }
+
+  async function saveVaultSettings() {
+    if (!db || !vaultPath.trim()) return;
+    await setSetting(db, "obsidian_vault_path", vaultPath.trim());
+    await setSetting(db, "obsidian_folder", vaultFolder.trim() || "inbox");
+    const detected = await isObsidianVault(vaultPath.trim());
+    setVaultStatus(detected ? "Obsidian vault detected — saved." : "Saved (no .obsidian folder found at that path — check it's the vault root).");
   }
 
   async function saveConnection() {
@@ -530,6 +562,26 @@ function SettingsView() {
           </button>
         )}
         {googleStatus && <p className="text-sm text-gray-500">{googleStatus}</p>}
+      </section>
+
+      <section className="space-y-2">
+        <h2 className="font-medium">Obsidian</h2>
+        <input
+          className="w-full border rounded px-3 py-2"
+          placeholder="Vault path (e.g. c:/Users/you/vault)"
+          value={vaultPath}
+          onChange={(e) => setVaultPath(e.target.value)}
+        />
+        <input
+          className="w-full border rounded px-3 py-2"
+          placeholder="Target folder (default: inbox)"
+          value={vaultFolder}
+          onChange={(e) => setVaultFolder(e.target.value)}
+        />
+        <button className="px-4 py-2 bg-black text-white rounded" onClick={saveVaultSettings}>
+          Save
+        </button>
+        {vaultStatus && <p className="text-sm text-gray-500">{vaultStatus}</p>}
       </section>
     </main>
   );

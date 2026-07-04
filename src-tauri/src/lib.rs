@@ -137,6 +137,18 @@ fn start_local_redirect_listener(app: tauri::AppHandle) -> Result<u16, String> {
     Ok(port)
 }
 
+#[tauri::command]
+fn detect_obsidian_vault(vault_path: String) -> bool {
+    std::path::Path::new(&vault_path).join(".obsidian").is_dir()
+}
+
+#[tauri::command]
+fn write_vault_note(vault_path: String, folder: String, filename: String, content: String) -> Result<(), String> {
+    let dir = std::path::Path::new(&vault_path).join(&folder);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join(&filename), content).map_err(|e| e.to_string())
+}
+
 fn open_sticky_window(app: &tauri::AppHandle, group_id: &str) {
     let label = format!("sticky-{group_id}");
     if let Some(win) = app.get_webview_window(&label) {
@@ -197,6 +209,8 @@ pub fn run() {
             run_agent,
             pause_agent,
             start_local_redirect_listener,
+            detect_obsidian_vault,
+            write_vault_note,
             google::google_auth_start,
             google::google_auth_status,
             google::google_auth_sign_out,
