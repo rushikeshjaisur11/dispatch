@@ -6,14 +6,21 @@ agent — spawn Claude Code or Codex against a note, or chat with a bring-your-o
 
 Built with Electron, React 19, Tailwind v4, and SQLite (`better-sqlite3`).
 
+> **Naming note**: the app is branded "Dispatch" (window title, titlebar), but
+> `package.json`'s internal `"name"` is still `"agentpad"` — that field drives Electron's
+> default userData folder path, and changing it would orphan existing local databases.
+> The repo/folder name and product name are "Dispatch"; don't rename the `name` field
+> without a data-migration plan.
+
 ## Features
 
 - **Sticky-note tasks** grouped into nested folders, with due dates, done/undone
   toggling, and per-note color tags.
 - **Run any CLI agent** (Claude Code, Codex, or a custom command you register) against a
-  note — streams live output, detects genuine task completion (vs. a mid-conversation
-  pause) via a completion-instruction sentinel, and supports follow-up turns that resume
-  the same session.
+  note — streams live output as a friendly status ("Reading a file…", "Running a
+  command…") instead of raw JSON, detects genuine task completion (vs. a
+  mid-conversation pause) via a completion-instruction sentinel, and supports follow-up
+  turns that resume the same session (or start a fresh one if nothing's resumable).
 - **BYOK chat** — talk to any OpenAI-compatible or Anthropic-compatible provider directly
   from the same panel, using your own API key (stored via OS-level encryption, never in
   the database).
