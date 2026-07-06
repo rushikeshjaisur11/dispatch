@@ -1,10 +1,9 @@
-import type Database from "@tauri-apps/plugin-sql";
-import { invoke } from "@tauri-apps/api/core";
+import type Database from "./db";
 import { getSetting } from "./settings";
 
 export async function isObsidianVault(vaultPath: string): Promise<boolean> {
   if (!vaultPath.trim()) return false;
-  return invoke<boolean>("detect_obsidian_vault", { vaultPath: vaultPath.trim() });
+  return window.api.detectObsidianVault(vaultPath.trim());
 }
 
 function slugify(title: string): string {
@@ -42,7 +41,7 @@ status: ${task.status}
 agent: ${agent}
 duration: ${formatDuration(startedAt, endedAt)}
 project: ${task.project_dir ?? ""}
-source: agentpad
+source: dispatch
 ---
 
 # ${task.title}
@@ -53,5 +52,5 @@ ${task.body}
 
 ${summary || "(no summary captured)"}
 `;
-  await invoke("write_vault_note", { vaultPath, folder, filename, content });
+  await window.api.writeVaultNote({ vaultPath, folder, filename, content });
 }

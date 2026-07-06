@@ -1,10 +1,10 @@
-import type Database from "@tauri-apps/plugin-sql";
-import { invoke } from "@tauri-apps/api/core";
+import type Database from "./db";
 import { getSetting, setSetting } from "./settings";
+import { EMBEDDED_GOOGLE_CLIENT_ID, EMBEDDED_GOOGLE_CLIENT_SECRET } from "./config";
 
 export async function getGoogleCreds(db: Database): Promise<{ clientId: string; clientSecret: string } | null> {
-  const clientId = await getSetting(db, "google_client_id");
-  const clientSecret = await getSetting(db, "google_client_secret");
+  const clientId = (await getSetting(db, "google_client_id")) || EMBEDDED_GOOGLE_CLIENT_ID;
+  const clientSecret = (await getSetting(db, "google_client_secret")) || EMBEDDED_GOOGLE_CLIENT_SECRET;
   if (!clientId || !clientSecret) return null;
   return { clientId, clientSecret };
 }
@@ -12,7 +12,7 @@ export async function getGoogleCreds(db: Database): Promise<{ clientId: string; 
 async function ensureCalendarId(db: Database, clientId: string, clientSecret: string): Promise<string> {
   const cached = await getSetting(db, "google_calendar_id");
   if (cached) return cached;
-  const id = await invoke<string>("google_calendar_ensure", { clientId, clientSecret });
+  const id = await window.api.googleCalendarEnsure({ clientId, clientSecret });
   await setSetting(db, "google_calendar_id", id);
   return id;
 }
@@ -22,7 +22,7 @@ export async function pushTaskToCalendar(db: Database, task: { id: string; title
   const creds = await getGoogleCreds(db);
   if (!creds || !task.due_at) return;
   const calendarId = await ensureCalendarId(db, creds.clientId, creds.clientSecret);
-  const eventId = await invoke<string>("google_calendar_upsert_event", {
+  const eventId = await window.api.googleCalendarUpsertEvent({
     clientId: creds.clientId,
     clientSecret: creds.clientSecret,
     calendarId,
@@ -48,12 +48,12 @@ export async function pullCalendarEvents(db: Database, groupId: string): Promise
   if (!creds) return;
   const calendarId = await ensureCalendarId(db, creds.clientId, creds.clientSecret);
   const syncToken = await getSetting(db, "google_sync_token");
-  const resp = await invoke<{ items?: CalendarEvent[]; nextSyncToken?: string }>("google_calendar_list_events", {
+  const resp = (await window.api.googleCalendarListEvents({
     clientId: creds.clientId,
     clientSecret: creds.clientSecret,
     calendarId,
     syncToken,
-  });
+  })) as { items?: CalendarEvent[]; nextSyncToken?: string };
   for (const event of resp.items ?? []) {
     const existing = await db.select<{ id: string }[]>("SELECT id FROM tasks WHERE calendar_event_id = $1", [event.id]);
     if (event.status === "cancelled") {

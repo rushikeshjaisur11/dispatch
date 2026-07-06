@@ -1,1 +1,232 @@
 @import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource/fraunces";
+@import "@fontsource-variable/jetbrains-mono";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Apple-glass re-skin: system-blue accent + cool neutral surface ladder, replacing the
+   prior teal/warm-paper palette. Radius scale widened toward Apple's continuous-corner
+   feel (see .squircle below for the true superellipse curve on high-visibility surfaces). */
+@theme {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Fraunces", ui-serif, serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, "Cascadia Code", Consolas, monospace;
+
+  --color-teal: #0a84ff;
+  --color-teal-dark: #0a84ff;
+  --color-amber: #c9862b;
+  --color-red: #c14e42;
+  --color-green: #4a9f6e;
+
+  /* note tags: spine + dot accents only, never a full card fill */
+  --color-tag-butter: #d9a441;
+  --color-tag-sage: #7a9a6a;
+  --color-tag-sky: #5a90b0;
+  --color-tag-blush: #c76f7f;
+  --color-tag-lilac: #9583b8;
+  --color-tag-clay: #b56b4a;
+
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+}
+
+body {
+  font-family: var(--font-sans);
+  color: var(--foreground);
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+
+.font-mono {
+  font-family: var(--font-mono);
+}
+
+/* Linear/Raycast use tabular figures on anything that updates in place (ids, timers,
+   counters) so the surrounding layout doesn't jitter. */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes status-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.status-running {
+  animation: status-pulse 2.5s ease-in-out infinite;
+  color: var(--color-teal);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-running {
+    animation: none;
+  }
+}
+
+/* Note-tag spine + dot utilities — the only place task/group color appears, per the
+   single-accent rule (color as a small tag, never a full card fill). */
+.tag-spine {
+  border-left: 3px solid var(--tag-color, var(--color-teal));
+}
+
+.tag-dot {
+  background-color: var(--tag-color, var(--color-teal));
+}
+
+/* Apple-style continuous corner curve (superellipse), for the highest-visibility
+   rounded surfaces only — note cards, AgentPanel, dialog content. Plain buttons/badges
+   keep ordinary border-radius. */
+.squircle {
+  border-radius: 24px;
+  clip-path: path(
+    "M 0 24 C 0 8 8 0 24 0 L calc(100% - 24px) 0 C calc(100% - 8px) 0 100% 8px 100% 24px L 100% calc(100% - 24px) C 100% calc(100% - 8px) calc(100% - 8px) 100% calc(100% - 24px) 100% L 24px 100% C 8px 100% 0 calc(100% - 8px) 0 calc(100% - 24px) Z"
+  );
+}
+
+/* Glass surface: translucent chrome for sidebar/titlebar/dialogs/AgentPanel, backed by
+   native Mica (Windows) / vibrancy (macOS) set on the BrowserWindow itself. Never used
+   on dense reading content (note text, console transcript) — those stay opaque. */
+.glass-surface {
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  background: color-mix(in srgb, var(--card) 72%, transparent);
+  border: 1px solid color-mix(in srgb, white 12%, transparent);
+}
+
+.dark .glass-surface {
+  border-color: color-mix(in srgb, white 8%, transparent);
+}
+
+@theme inline {
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+}
+
+/* Light theme — cool neutral ramp (Apple-style), replacing the prior warm-paper ramp. */
+:root {
+  --background: #f5f5f7;
+  --foreground: #1d1d1f;
+  --card: #ffffff;
+  --card-foreground: #1d1d1f;
+  --popover: #e8e8ed;
+  --popover-foreground: #1d1d1f;
+  --primary: var(--color-teal-dark);
+  --primary-foreground: #ffffff;
+  --secondary: #e8e8ed;
+  --secondary-foreground: #1d1d1f;
+  --muted: #e8e8ed;
+  --muted-foreground: #6e6e73;
+  --accent: #e8e8ed;
+  --accent-foreground: #1d1d1f;
+  --destructive: var(--color-red);
+  --border: #d8d8dc;
+  --input: #d8d8dc;
+  --ring: var(--color-teal-dark);
+  --chart-1: var(--color-teal-dark);
+  --chart-2: #6e6e73;
+  --chart-3: var(--color-red);
+  --chart-4: var(--color-amber);
+  --chart-5: #d8d8dc;
+  --radius: 0.5rem;
+  --sidebar: #e8e8ed;
+  --sidebar-foreground: #1d1d1f;
+  --sidebar-primary: var(--color-teal-dark);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #e8e8ed;
+  --sidebar-accent-foreground: #1d1d1f;
+  --sidebar-border: #d8d8dc;
+  --sidebar-ring: var(--color-teal-dark);
+}
+
+/* Dark theme — Apple's own dark-gray ramp, replacing the prior near-black "Machine" ramp. */
+.dark {
+  --background: #1c1c1e;
+  --foreground: #f5f5f7;
+  --card: #2c2c2e;
+  --card-foreground: #f5f5f7;
+  --popover: #3a3a3c;
+  --popover-foreground: #f5f5f7;
+  --primary: var(--color-teal);
+  --primary-foreground: #ffffff;
+  --secondary: #3a3a3c;
+  --secondary-foreground: #f5f5f7;
+  --muted: #3a3a3c;
+  --muted-foreground: #98989d;
+  --accent: #3a3a3c;
+  --accent-foreground: #f5f5f7;
+  --destructive: var(--color-red);
+  --border: #48484a;
+  --input: #48484a;
+  --ring: var(--color-teal);
+  --chart-1: var(--color-teal);
+  --chart-2: #98989d;
+  --chart-3: var(--color-red);
+  --chart-4: var(--color-amber);
+  --chart-5: #48484a;
+  --sidebar: #2c2c2e;
+  --sidebar-foreground: #f5f5f7;
+  --sidebar-primary: var(--color-teal);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #3a3a3c;
+  --sidebar-accent-foreground: #f5f5f7;
+  --sidebar-border: #48484a;
+  --sidebar-ring: var(--color-teal);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "cv05", "ss03", "calt", "kern";
+  }
+  button:not(:disabled), [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+  html {
+    @apply font-sans;
+  }
+}

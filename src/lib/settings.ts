@@ -1,4 +1,4 @@
-import type Database from "@tauri-apps/plugin-sql";
+import type Database from "./db";
 
 export async function getSetting(db: Database, key: string): Promise<string | null> {
   const rows = await db.select<{ value: string }[]>("SELECT value FROM settings WHERE key = $1", [key]);

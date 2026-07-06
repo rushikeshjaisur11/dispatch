@@ -1,4 +1,4 @@
-import type Database from "@tauri-apps/plugin-sql";
+import type Database from "./db";
 import { getSupabase } from "./supabase";
 import { getSetting, setSetting } from "./settings";
 
